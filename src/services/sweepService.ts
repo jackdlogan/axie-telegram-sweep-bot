@@ -692,7 +692,7 @@ class SweepService {
             settlePrice: axie.order!.currentPrice,
             maker: axie.order!.maker || (axie as any).order?.seller,
             paymentToken: order.paymentToken,
-            kind: order.kind === 0 ? 'Sell' : 'Offer'
+            kind: order.kind === OrderKind.Sell ? 'Sell' : 'Offer'
           });
 
           /* ----------------------------------------------------------
@@ -894,7 +894,7 @@ class SweepService {
 
     const preparedOrder: Erc721Order = {
       maker: normalizedMaker,
-      kind: isSell ? OrderKind.Sell : OrderKind.Offer,
+      kind: OrderKind.Sell,
       assets: [assetItem],
       // Convert all timestamps to strings
       expiredAt: (order.expiredAt ?? (now + 86400)).toString(),
@@ -954,7 +954,7 @@ class SweepService {
         basePrice: preparedOrder.basePrice,
         expectedState: preparedOrder.expectedState,
         nonce: preparedOrder.nonce,
-        kind: preparedOrder.kind === 0 ? 'Sell' : 'Offer'
+        kind: preparedOrder.kind === OrderKind.Sell ? 'Sell' : 'Offer'
       }
     });
 
