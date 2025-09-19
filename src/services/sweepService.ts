@@ -838,9 +838,9 @@ class SweepService {
       erc: 1, // ERC721 standard (marketplace expects 1, fits uint8)
       addr: this.marketplaceService.getAxieContractAddress(),
       id: axie.id.toString(), // Convert ID to string to avoid BigInt mixing
-      // NOTE: Marketplace signed payloads often set quantity = 0 for ERC721.
-      // Use 0 to match the signature rather than 1.
-      quantity: "0"
+      // NOTE: Marketplace signed payloads for ERC721 expect `quantity = 1`
+      // to satisfy signature validation in CoreExchange.
+      quantity: "1"
     };
 
     // Get current timestamp for defaults
