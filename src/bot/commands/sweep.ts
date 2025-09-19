@@ -725,15 +725,15 @@ Collection: *${collectionNames[collection]}*
 Wallet: *${wallet.name}* (${wallet.address.substring(0, 6)}...${wallet.address.substring(wallet.address.length - 4)})
 
 *Wallet Balances:*
-• WETH: *${wethBalance.toFixed(6)} ETH* ($${wethUsdValue.toFixed(2)}) ${wethBalance < preview.totalCost ? '⚠️ INSUFFICIENT' : '✅'}
-• RON: *${ronBalance.toFixed(6)} ETH* (for gas fees) ${ronBalance < 0.01 ? '⚠️ LOW GAS' : '✅'}
+• WETH: *${wethBalance.toFixed(6)} WETH* ($${wethUsdValue.toFixed(2)}) ${wethBalance < preview.totalCost ? '⚠️ INSUFFICIENT' : '✅'}
+• RON: *${ronBalance.toFixed(6)} RON* (for gas fees) ${ronBalance < 0.01 ? '⚠️ LOW GAS' : '✅'}
 
 *Sweep Details:*
 • Quantity: ${preview.quantity} Axies
 • Average Price: ${preview.averagePrice.toFixed(4)} ETH
-• Total Cost: ${preview.totalCost.toFixed(4)} ETH
-• Estimated Gas: ${preview.estimatedGasCost.toFixed(4)} ETH
-• Total with Gas: ${preview.totalWithGas.toFixed(4)} ETH
+• Total Cost: ${preview.totalCost.toFixed(4)} WETH
+• Estimated Gas: ${preview.estimatedGasCost.toFixed(4)} RON
+• Total: ${preview.totalCost.toFixed(4)} WETH + ${preview.estimatedGasCost.toFixed(4)} RON (gas)
 ${needsApproval ? '• WETH Approval: Required (one-time transaction)' : '• WETH Approval: ✅ Already approved'}
 
 ${preview.axiesToPurchase.length === 0 ? '⚠️ No Axies found matching your criteria!' : ''}
@@ -1051,7 +1051,7 @@ Would you like to approve WETH now?
 
 You are about to purchase *${preview.quantity} ${collectionNames[preview.collection]} Axies* for a total of *${preview.totalCost.toFixed(4)} ETH* plus *${preview.estimatedGasCost.toFixed(4)} ETH* in gas fees.
 
-Total transaction value: *${preview.totalWithGas.toFixed(4)} ETH*
+Total: *${preview.totalCost.toFixed(4)} WETH* + *${preview.estimatedGasCost.toFixed(4)} RON* (gas)
 
 This action will use your WETH balance and cannot be undone. Are you sure you want to proceed?
     `;
