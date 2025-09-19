@@ -694,7 +694,7 @@ async function showSweepPreview(ctx: any, userId: number): Promise<void> {
       );
       const connectedToken = tokenService.connect(walletInstance);
       // Gateway contract is the actual spender that pulls WETH for the purchase
-      const gatewayAddress = '0x3B3aDf1422f84254B7fbb0e7cA62Bd0865133fe3';
+      const gatewayAddress = '0x21a0a1c081dc2f3e48dc391786f53035f85ce0bc';
       /**
        * Format the total cost before passing it into `checkAllowance`.
        * The helper internally calls `ethers.parseEther`, which will throw
@@ -887,7 +887,7 @@ async function approveWeth(ctx: any, userId: number): Promise<void> {
       const connectedToken = tokenService.connect(walletInstance);
       
       // Gateway contract is the actual spender that pulls WETH for the purchase
-      const gatewayAddress = '0x3B3aDf1422f84254B7fbb0e7cA62Bd0865133fe3';
+      const gatewayAddress = '0x21a0a1c081dc2f3e48dc391786f53035f85ce0bc';
       
       // Approve WETH
       const approveResult = await connectedToken.approveWeth(
@@ -1018,7 +1018,7 @@ Before you can sweep Axies, you need to approve the marketplace to spend your WE
 This is a one-time transaction that allows the marketplace to use your WETH for purchases.
 
 *Approval Details:*
-• Marketplace Contract: \`0x3B3aDf1422f84254B7fbb0e7cA62Bd0865133fe3\`
+• Marketplace Contract: \`0x21a0a1c081dc2f3e48dc391786f53035f85ce0bc\`
 • Amount to Approve: ${preview.totalCost.toFixed(4)} ETH
 • Estimated Gas: ~0.001 ETH
 
