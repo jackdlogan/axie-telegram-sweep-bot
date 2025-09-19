@@ -622,14 +622,18 @@ class SweepService {
         /* --------------------------------------------------------------
          * 3. Ensure WETH allowance is sufficient
          * ------------------------------------------------------------ */
-        // Use the *signed* settle price for allowance to avoid under-approval
-        const signedPricesWei = signedBatch.map(a =>
-          BigInt(computeSettlePrice(a.order!))
-        );
-        const batchTotalWei = signedPricesWei.reduce(
-          (sum, v) => sum + v,
-          0n
-        );
+        // Use the *signed* settle price and include marketplace fee (bps)
+        // plus a small 1-gwei head-room to guarantee the allowance covers
+        // exact transferFrom() amount.
+        const batchTotalWei = signedBatch.reduce((sum, axie) => {
+          const price = BigInt(computeSettlePrice(axie.order!));
+          const feeBp = BigInt(
+            (axie.order as any).marketFeePercentage ?? 425
+          ); // default 4.25 %
+          // Marketplace fee = ceil(price * feeBp / 10_000)
+          const fee = (price * feeBp + 9_999n) / 10_000n;
+          return sum + price + fee;
+        }, 0n) + 1_000_000_000n; // add 1 gwei safety buffer
         const connectedToken = this.tokenService.connect(wallet);
         // IMPORTANT: approve WETH allowance to the *deprecated* gateway,
         // because this is the contract that performs transferFrom().
