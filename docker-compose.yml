@@ -1,0 +1,94 @@
+version: "3.9"
+
+# Define named volumes for data persistence
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  bot_logs:
+    driver: local
+  bot_data:
+    driver: local
+  bot_sessions:
+    driver: local
+
+# Define networks
+networks:
+  axie_bot_network:
+    driver: bridge
+
+services:
+  # Main bot service
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: axie-sweep-bot
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - DB_TYPE=postgres
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - REDIS_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - bot_logs:/app/logs
+      - bot_data:/app/data
+      - bot_sessions:/app/sessions
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    networks:
+      - axie_bot_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', res => process.exit(res.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # PostgreSQL database service
+  db:
+    image: postgres:15-alpine
+    container_name: axie-sweep-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-axie_bot_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-strong_password_change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-axie_bot_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"  # Exposed only to localhost for security
+    networks:
+      - axie_bot_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-axie_bot_user} -d ${POSTGRES_DB:-axie_bot_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Redis cache service (optional)
+  redis:
+    image: redis:6-alpine
+    container_name: axie-sweep-redis
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-redis_password_change_me}"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"  # Exposed only to localhost for security
+    networks:
+      - axie_bot_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
