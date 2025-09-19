@@ -562,6 +562,33 @@ class SweepService {
         throw new Error('No Axies to purchase - batches array is empty');
       }
 
+      /**
+       * Local helper – compute the signed settle-price exactly the same way the
+       * marketplace backend signs it.  We define it once so it can be reused
+       * both for allowance calculation (step 3) and when building the actual
+       * SettleOrderParams later.
+       */
+      const computeSettlePrice = (o: any): string => {
+        try {
+          const startedAt = BigInt(String(o.startedAt ?? 0));
+          const endedAt = BigInt(String(o.endedAt ?? 0));
+          const base = BigInt(String(o.basePrice ?? o.currentPrice));
+          const ended = BigInt(String(o.endedPrice ?? o.currentPrice ?? 0));
+          if (endedAt === BigInt(0) || endedAt === startedAt) {
+            return base.toString();
+          }
+          const nowSec = BigInt(Math.floor(Date.now() / 1000));
+          const t = nowSec < endedAt ? nowSec : endedAt;
+          const elapsed = t > startedAt ? (t - startedAt) : BigInt(0);
+          const duration = endedAt - startedAt;
+          const delta = ended - base;
+          const price = base + (delta * elapsed) / duration;
+          return price < BigInt(0) ? '0' : price.toString();
+        } catch {
+          return String(o.basePrice ?? o.currentPrice);
+        }
+      };
+
       let lastReceipt: ethers.TransactionReceipt | undefined;
 
       for (const batch of batches) {
@@ -595,9 +622,13 @@ class SweepService {
         /* --------------------------------------------------------------
          * 3. Ensure WETH allowance is sufficient
          * ------------------------------------------------------------ */
-        const batchTotalWei = signedBatch.reduce(
-          (sum, axie) => sum + BigInt(axie.order!.currentPrice),
-          BigInt(0)
+        // Use the *signed* settle price for allowance to avoid under-approval
+        const signedPricesWei = signedBatch.map(a =>
+          BigInt(computeSettlePrice(a.order!))
+        );
+        const batchTotalWei = signedPricesWei.reduce(
+          (sum, v) => sum + v,
+          0n
         );
         const connectedToken = this.tokenService.connect(wallet);
         // IMPORTANT: approve WETH allowance to the *deprecated* gateway,
@@ -697,27 +728,6 @@ class SweepService {
           }
 
           // Compute settle price according to auction curve to satisfy on-chain check
-          const computeSettlePrice = (o: any): string => {
-            try {
-              const startedAt = BigInt(String(o.startedAt ?? 0));
-              const endedAt = BigInt(String(o.endedAt ?? 0));
-              const base = BigInt(String(o.basePrice ?? o.currentPrice));
-              const ended = BigInt(String(o.endedPrice ?? o.currentPrice ?? 0));
-              if (endedAt === BigInt(0) || endedAt === startedAt) {
-                return base.toString();
-              }
-              // now or min(now, endedAt)
-              const nowSec = BigInt(Math.floor(Date.now() / 1000));
-              const t = nowSec < endedAt ? nowSec : endedAt;
-              const elapsed = t > startedAt ? (t - startedAt) : BigInt(0);
-              const duration = endedAt - startedAt;
-              const delta = ended - base;
-              const price = base + (delta * elapsed) / duration;
-              return price < BigInt(0) ? '0' : price.toString();
-            } catch {
-              return String(o.basePrice ?? o.currentPrice);
-            }
-          };
           const signedPrice = computeSettlePrice(axie.order);
           settleOrders.push({
             // Always convert to string; use 0 when undefined/null
