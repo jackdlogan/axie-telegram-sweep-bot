@@ -487,9 +487,10 @@ export default class MarketGatewayContract {
            * required by the multi-send contract (see reference bulk buy
            * implementation).
            * -------------------------------------------------------- */
-          // MUST be 0 for WETH payments; settleOrder is non-payable and the
-          // payment happens via WETH.transferFrom, not msg.value.
-          value: BigInt(0)
+          // Pass the signed settlePrice; the gateway will pull WETH via
+          // transferFrom so no ETH is actually sent, but the contract
+          // requires this value to mirror the reference implementation.
+          value: BigInt(orderParam.settlePrice)
         });
       }
       
@@ -498,7 +499,7 @@ export default class MarketGatewayContract {
       const tx = await contract.bulkInteractWith(
         marketplaceGateway,
         batchParams,
-        false, // requiredAllSuccess = false
+        true, // requiredAllSuccess = true (atomic batch)
         { value: BigInt(0) } // No ETH sent directly, using WETH
       );
       
