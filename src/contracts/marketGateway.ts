@@ -315,7 +315,7 @@ export default class MarketGatewayContract {
   public encodeOrder(order: Erc721Order): string {
     try {
       const orderTypes = [
-        '(address maker, uint8 kind, (uint8 erc,address addr,uint256 id,uint256 quantity)[] assets, uint256 expiredAt, address paymentToken, uint256 startedAt, uint256 basePrice, uint256 endedAt, uint256 endedPrice, uint256 expectedState, uint256 nonce, uint256 marketFeePercentage)',
+        '(address maker,uint8 kind,(uint8 erc,address addr,uint256 id,uint256 quantity)[] assets,uint64 expiredAt,address paymentToken,uint64 startedAt,uint256 basePrice,uint64 endedAt,uint256 endedPrice,uint8 expectedState,uint256 nonce,uint16 marketFeePercentage)',
       ];
 
       // Re-map and cast fields exactly as expected by the contract encoder
