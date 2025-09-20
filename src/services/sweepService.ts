@@ -920,16 +920,16 @@ class SweepService {
     if ((order as any).kind !== undefined) {
       const kindStr = String((order as any).kind).toLowerCase();
       // Accept both textual and numeric representations
-      if (kindStr === 'offer' || kindStr === '2') {
+      if (kindStr === 'offer' || kindStr === '0') {
         isSell = false;
-      } else if (kindStr === 'sell' || kindStr === '0') {
+      } else if (kindStr === 'sell' || kindStr === '1') {
         isSell = true;
       }
     }
 
     const preparedOrder: Erc721Order = {
       maker: normalizedMaker,
-      kind: OrderKind.Sell,
+      kind: isSell ? OrderKind.Sell : OrderKind.Offer,
       assets: [assetItem],
       // Convert all timestamps to strings
       expiredAt: (order.expiredAt ?? (now + 86400)).toString(),
