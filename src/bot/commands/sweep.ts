@@ -1019,7 +1019,6 @@ This is a one-time transaction that allows the marketplace to use your WETH for 
 
 *Approval Details:*
 • Marketplace Contract: \`0x21a0a1c081dc2f3e48dc391786f53035f85ce0bc\`
-• Marketplace Contract: \`0x3B3aDf1422f84254B7fbb0e7cA62Bd0865133fe3\`
 • Amount to Approve: ${preview.totalCost.toFixed(4)} ETH
 • Estimated Gas: ~0.001 ETH
 

@@ -658,31 +658,20 @@ class SweepService {
         const connectedToken = this.tokenService.connect(wallet);
         // IMPORTANT: approve WETH allowance to the *deprecated* gateway,
         // because this is the contract that performs transferFrom().
-        const allowance = await connectedToken.checkAllowance(deprecatedGateway);
-        // Log current allowance for easier diagnostics
-        this.logger.info('Current WETH allowance', {
-          spender: deprecatedGateway,
-          allowance: ethers.formatEther(allowance.allowance)
-        });
+        const allowance = await connectedToken.checkAllowance(gatewayAddress);
         // Ensure both sides are BigInt to avoid "Cannot mix BigInt and other types" errors
         if (BigInt(allowance.allowance) < batchTotalWei) {
           this.logger.info('Approving WETH to gateway', {
-            spender: deprecatedGateway,
+            spender: gatewayAddress,
             amount: ethers.formatEther(batchTotalWei)
           });
           const approveRes = await connectedToken.approveWeth(
             ethers.formatEther(batchTotalWei),
-            deprecatedGateway
+            gatewayAddress
           );
           if (!approveRes.success) {
             throw new Error(`WETH approve failed: ${approveRes.error}`);
           }
-          // Re-check allowance after approval
-          const postAllowance = await connectedToken.checkAllowance(deprecatedGateway);
-          this.logger.info('Post-approval WETH allowance', {
-            spender: deprecatedGateway,
-            allowance: ethers.formatEther(postAllowance.allowance)
-          });
         }
 
         /* --------------------------------------------------------------
