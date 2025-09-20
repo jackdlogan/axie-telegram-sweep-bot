@@ -828,7 +828,15 @@ class SweepService {
         success: true,
         // Revert to legacy behaviour – rely solely on `transactionHash`
         // which is always present on successful receipts.
-        txHash: (lastReceipt as any).transactionHash || '',
+        txHash:
+          // 1) preferred: explicit `transactionHash` (ethers v5/legacy receipts)
+          (lastReceipt as any).transactionHash ||
+          // 2) ethers v6: generic `hash` field on receipt
+          (lastReceipt as any).hash ||
+          // 3) fallback captured from the original TransactionResponse
+          lastTxHash ||
+          // 4) final empty string if all else fails
+          '',
         gasUsed
       };
     } catch (error) {
