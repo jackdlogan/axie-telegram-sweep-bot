@@ -45,6 +45,8 @@ export interface SweepResult {
   failedAxies: Axie[];
   totalSpent: number;
   gasUsed?: number;
+  /** raw transaction hash even if DB save failed */
+  txHash?: string;
   error?: string;
 }
 
@@ -424,18 +426,26 @@ class SweepService {
        * ----------------------------------------------------------------- */
       let transaction: PurchaseTransaction | undefined;
       if (txResult.success && txResult.txHash) {
-        transaction = await this.saveSweepTransaction(db, {
-          txHash: txResult.txHash,
-          userId: options.userId,
-          walletId: options.walletId,
-          collection: options.collection,
-          axieIds: axiesToPurchase.map(axie => axie.id),
-          totalAmount: totalCost,
-          gasUsed: txResult.gasUsed,
-          status: 'confirmed',
-          createdAt: new Date(),
-          updatedAt: new Date()
-        });
+        try {
+          transaction = await this.saveSweepTransaction(db, {
+            txHash: txResult.txHash,
+            userId: options.userId,
+            walletId: options.walletId,
+            collection: options.collection,
+            axieIds: axiesToPurchase.map(axie => axie.id),
+            totalAmount: totalCost,
+            gasUsed: txResult.gasUsed,
+            status: 'confirmed',
+            createdAt: new Date(),
+            updatedAt: new Date()
+          });
+        } catch (persistError) {
+          // Do not flip success – just log failure to persist
+          this.logger.error('Failed to persist sweep transaction', {
+            error: persistError instanceof Error ? persistError.message : String(persistError),
+            txHash: txResult.txHash
+          });
+        }
       }
       
       // Return result
@@ -446,6 +456,7 @@ class SweepService {
         failedAxies: txResult.success ? [] : axiesToPurchase,
         totalSpent: txResult.success ? totalCost : 0,
         gasUsed: txResult.gasUsed,
+        txHash: txResult.txHash,
         error: txResult.error
       };
     } catch (error) {
@@ -487,11 +498,18 @@ class SweepService {
       // Get today's transactions
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      
+      /*
+       * Determine which column exists so we don't hit “no such column”
+       * on SQLite.  Prefer the new `amount` column; fall back to the
+       * legacy `total_amount` column when `amount` is absent.
+       */
+      const hasAmount = await db.schema.hasColumn('transactions', 'amount');
+      const sumColumn = hasAmount ? 'amount' : 'total_amount';
+
       const todayTransactions = await db('transactions')
         .where({ user_id: userId, status: 'confirmed' })
         .where('created_at', '>=', today)
-        .sum('total_amount as total')
+        .sum<{ total: number }>(`${sumColumn} as total`)
         .first();
       
       const todayTotal = parseFloat(todayTransactions?.total ?? '0');
@@ -542,6 +560,9 @@ class SweepService {
       /* ------------------------------------------------------------------
        * 1.  Split into batches of max 20 to avoid gas-limit issues
        * ----------------------------------------------------------------- */
+      // Track last transaction hash so we can still surface it when the
+      // receipt object in ethers v6 no longer includes .transactionHash.
+      let lastTxHash: string | undefined;
       const MAX_BATCH = 20;
       const batches: Axie[][] = [];
       for (let i = 0; i < axies.length; i += MAX_BATCH) {
@@ -637,20 +658,31 @@ class SweepService {
         const connectedToken = this.tokenService.connect(wallet);
         // IMPORTANT: approve WETH allowance to the *deprecated* gateway,
         // because this is the contract that performs transferFrom().
-        const allowance = await connectedToken.checkAllowance(gatewayAddress);
+        const allowance = await connectedToken.checkAllowance(deprecatedGateway);
+        // Log current allowance for easier diagnostics
+        this.logger.info('Current WETH allowance', {
+          spender: deprecatedGateway,
+          allowance: ethers.formatEther(allowance.allowance)
+        });
         // Ensure both sides are BigInt to avoid "Cannot mix BigInt and other types" errors
         if (BigInt(allowance.allowance) < batchTotalWei) {
           this.logger.info('Approving WETH to gateway', {
-            spender: gatewayAddress,
+            spender: deprecatedGateway,
             amount: ethers.formatEther(batchTotalWei)
           });
           const approveRes = await connectedToken.approveWeth(
             ethers.formatEther(batchTotalWei),
-            gatewayAddress
+            deprecatedGateway
           );
           if (!approveRes.success) {
             throw new Error(`WETH approve failed: ${approveRes.error}`);
           }
+          // Re-check allowance after approval
+          const postAllowance = await connectedToken.checkAllowance(deprecatedGateway);
+          this.logger.info('Post-approval WETH allowance', {
+            spender: deprecatedGateway,
+            allowance: ethers.formatEther(postAllowance.allowance)
+          });
         }
 
         /* --------------------------------------------------------------
@@ -759,6 +791,8 @@ class SweepService {
         }
 
         const tx = await gatewayContract.settleOrders({ orders: settleOrders });
+        // Store hash from the TransactionResponse – available immediately.
+        lastTxHash = tx.hash;
         
         this.logger.info('Batch purchase transaction sent', { 
           hash: tx.hash, 
@@ -793,7 +827,7 @@ class SweepService {
       // implementations `effectiveGasPrice` may be undefined (ethers v5)
       // so we fall back to `gasPrice` which is always present.
       // We also cast both operands to BigInt explicitly to avoid the
-      // “Cannot mix BigInt and other types” runtime error.
+      // "Cannot mix BigInt and other types" runtime error.
       const gasUsedBig   = BigInt(lastReceipt.gasUsed.toString());
       const gasPriceBig  = BigInt(
         ((lastReceipt as any).effectiveGasPrice ?? lastReceipt.gasPrice).toString()
@@ -803,7 +837,11 @@ class SweepService {
 
       return {
         success: true,
-        txHash: lastReceipt.transactionHash,
+        txHash:
+          (lastReceipt as any).transactionHash ||
+          (lastReceipt as any).hash ||
+          lastTxHash ||
+          '',
         gasUsed
       };
     } catch (error) {
@@ -815,8 +853,14 @@ class SweepService {
       
       // Extract transaction hash if available
       let txHash = '';
-      if (error && typeof error === 'object' && 'transactionHash' in error) {
-        txHash = (error as any).transactionHash;
+      // Ethers v6 may expose the hash on different keys depending on where
+      // the failure originates (e.g. `.hash` on TransactionResponse or
+      // `.transactionHash` on a reverted receipt).  Capture both.
+      if (error && typeof error === 'object') {
+        txHash =
+          (error as any).transactionHash ||
+          (error as any).hash ||
+          '';
       }
       
       return {
@@ -936,8 +980,8 @@ class SweepService {
      * Comprehensive diagnostics – log the original order we received
      * from the GraphQL API **and** the encoded order that will be sent
      * to the Market Gateway.  This makes it much easier to diagnose
-     * on-chain validation errors such as “invalid payment token
-     * standard”, bad signatures, incorrect nonce, etc.
+     * on-chain validation errors such as "invalid payment token
+     * standard", bad signatures, incorrect nonce, etc.
      * ---------------------------------------------------------------- */
     this.logger.warn('PREPARED ORDER DETAILS', {
       axieId: axie.id,
@@ -995,22 +1039,48 @@ class SweepService {
    */
   private async saveSweepTransaction(db: Knex, transaction: PurchaseTransaction): Promise<PurchaseTransaction> {
     try {
-      // Insert transaction
-      const [id] = await db('transactions').insert({
+      /* ------------------------------------------------------------------
+       * 1. Insert into master `transactions` table (tx_type = 'sweep')
+       * ---------------------------------------------------------------- */
+      const [txId] = await db('transactions')
+        .insert({
+          user_id: transaction.userId,
+          wallet_id: transaction.walletId,
+          tx_hash: transaction.txHash,
+          tx_type: 'sweep',
+          status: transaction.status,
+          amount: transaction.totalAmount,
+          gas_used: transaction.gasUsed,
+          metadata: JSON.stringify({ collection: transaction.collection }),
+          created_at: transaction.createdAt,
+          updated_at: transaction.updatedAt
+        })
+        .returning('id');
+
+      /* ------------------------------------------------------------------
+       * 2. Insert into `sweep_history` (detailed per-sweep info)
+       * ---------------------------------------------------------------- */
+      await db('sweep_history').insert({
         user_id: transaction.userId,
         wallet_id: transaction.walletId,
-        tx_hash: transaction.txHash,
+        transaction_id: txId,
         collection: transaction.collection,
-        axie_ids: transaction.axieIds,
+        quantity: transaction.axieIds.length,
+        max_price: null,
         total_amount: transaction.totalAmount,
-        gas_used: transaction.gasUsed,
-        status: transaction.status,
+        axie_ids: JSON.stringify(transaction.axieIds),
+        status: 'completed',
         created_at: transaction.createdAt,
-        updated_at: transaction.updatedAt
+        updated_at: transaction.updatedAt,
+        completed_at: transaction.createdAt
       });
-      
-      this.logger.info('Sweep transaction saved to database', { id, txHash: transaction.txHash });
-      
+
+      /* ------------------------------------------------------------------
+       * 3. Enforce keeping only the latest 30 sweep tx for this user
+       * ---------------------------------------------------------------- */
+      await this.enforceHistoryRetention(db, transaction.userId, 30);
+
+      this.logger.info('Sweep transaction saved', { txId, txHash: transaction.txHash });
       return transaction;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1020,6 +1090,35 @@ class SweepService {
         txHash: transaction.txHash 
       });
       throw error;
+    }
+  }
+
+  /**
+   * Keep only the latest `limit` sweep transactions for a user.
+   */
+  private async enforceHistoryRetention(db: Knex, userId: number, limit: number = 30): Promise<void> {
+    try {
+      const oldIds = await db('transactions')
+        .where({ user_id: userId, tx_type: 'sweep' })
+        .orderBy('created_at', 'desc')
+        .offset(limit)
+        .pluck('id');
+
+      if (oldIds.length === 0) return;
+
+      await db('sweep_history')
+        .whereIn('transaction_id', oldIds)
+        .andWhere({ user_id: userId })
+        .del();
+
+      await db('transactions')
+        .whereIn('id', oldIds)
+        .andWhere({ user_id: userId })
+        .del();
+
+      this.logger.info('Old sweep history pruned', { userId, removed: oldIds.length });
+    } catch (err) {
+      this.logger.warn('Failed to prune sweep history', { err, userId });
     }
   }
 
@@ -1040,25 +1139,57 @@ class SweepService {
     error?: string
   ): Promise<void> {
     try {
-      await db('transactions')
+      // Update transactions row
+      const [row] = await db('transactions')
         .where({ tx_hash: txHash })
+        .select('id', 'metadata');
+
+      if (!row) {
+        this.logger.warn('updateTransactionStatus: tx not found', { txHash, status });
+        return;
+      }
+
+      // Merge error into metadata if provided
+      let metadata: any = {};
+      try {
+        metadata = row.metadata ? JSON.parse(row.metadata) : {};
+      } catch {
+        /* ignore corrupt metadata */
+      }
+      if (error) metadata.error = error;
+
+      await db('transactions')
+        .where({ id: row.id })
         .update({
           status,
           gas_used: gasUsed,
-          error: error,
+          metadata: JSON.stringify(metadata),
           updated_at: new Date()
         });
-      
+
+      // Reflect status in sweep_history
+      const histStatus =
+        status === 'confirmed'
+          ? 'completed'
+          : status === 'failed'
+          ? 'failed'
+          : 'pending';
+      const histUpdate: any = {
+        status: histStatus,
+        updated_at: new Date()
+      };
+      if (status === 'confirmed' || status === 'failed') {
+        histUpdate.completed_at = new Date();
+      }
+      await db('sweep_history')
+        .where({ transaction_id: row.id })
+        .update(histUpdate);
+
       this.logger.info('Transaction status updated', { txHash, status });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error('Failed to update transaction status', { 
-        error: errorMessage,
-        stack: error instanceof Error ? error.stack : undefined,
-        txHash, 
-        status 
-      });
-      throw error;
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      this.logger.error('Failed to update transaction status', { error: errorMessage, txHash, status });
+      throw e;
     }
   }
 
@@ -1083,7 +1214,10 @@ class SweepService {
           if (receipt) {
             // Transaction mined
             const success = receipt.status === 1;
-            const gasUsed = parseFloat(ethers.formatEther(receipt.gasUsed * receipt.gasPrice));
+            const gasUsedBig = BigInt(receipt.gasUsed.toString());
+            const gasPriceBig = BigInt(((receipt as any).effectiveGasPrice ?? receipt.gasPrice).toString());
+            const gasCostWei = gasUsedBig * gasPriceBig;
+            const gasUsed = parseFloat(ethers.formatEther(gasCostWei));
             
             // Update transaction status
             await this.updateTransactionStatus(
@@ -1151,26 +1285,28 @@ class SweepService {
     offset: number = 0
   ): Promise<PurchaseTransaction[]> {
     try {
-      const transactions = await db('transactions')
-        .where({ user_id: userId })
-        .orderBy('created_at', 'desc')
-        .limit(limit)
-        .offset(offset)
+      const rows = await db('transactions as t')
+        .innerJoin('sweep_history as sh', 'sh.transaction_id', 't.id')
+        .where({ 't.user_id': userId, 't.tx_type': 'sweep' })
+        .orderBy('t.created_at', 'desc')
+        .limit(30)
         .select(
-          'tx_hash as txHash',
-          'user_id as userId',
-          'wallet_id as walletId',
-          'collection',
-          'axie_ids as axieIds',
-          'total_amount as totalAmount',
-          'gas_used as gasUsed',
-          'status',
-          'error',
-          'created_at as createdAt',
-          'updated_at as updatedAt'
+          't.tx_hash as txHash',
+          't.user_id as userId',
+          't.wallet_id as walletId',
+          'sh.collection as collection',
+          'sh.axie_ids as axieIds',
+          'sh.total_amount as totalAmount',
+          't.gas_used as gasUsed',
+          't.status as status',
+          't.created_at as createdAt',
+          't.updated_at as updatedAt'
         );
-      
-      return transactions;
+
+      return rows.map((r: any) => ({
+        ...r,
+        axieIds: typeof r.axieIds === 'string' ? JSON.parse(r.axieIds) : r.axieIds
+      }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error('Failed to get transaction history', { 
@@ -1195,30 +1331,31 @@ class SweepService {
     userId: number
   ): Promise<{ transaction: PurchaseTransaction; axies: Axie[] }> {
     try {
-      // Get transaction
-      const transaction = await db('transactions')
-        .where({ tx_hash: txHash, user_id: userId })
+      const transaction: any = await db('transactions as t')
+        .innerJoin('sweep_history as sh', 'sh.transaction_id', 't.id')
+        .where({ 't.tx_hash': txHash, 't.user_id': userId, 't.tx_type': 'sweep' })
         .first(
-          'tx_hash as txHash',
-          'user_id as userId',
-          'wallet_id as walletId',
-          'collection',
-          'axie_ids as axieIds',
-          'total_amount as totalAmount',
-          'gas_used as gasUsed',
-          'status',
-          'error',
-          'created_at as createdAt',
-          'updated_at as updatedAt'
+          't.tx_hash as txHash',
+          't.user_id as userId',
+          't.wallet_id as walletId',
+          'sh.collection as collection',
+          'sh.axie_ids as axieIds',
+          'sh.total_amount as totalAmount',
+          't.gas_used as gasUsed',
+          't.status as status',
+          't.created_at as createdAt',
+          't.updated_at as updatedAt'
         );
-      
+
       if (!transaction) {
         throw new Error('Transaction not found or does not belong to this user');
       }
-      
-      // Get Axie details
+
+      if (typeof transaction.axieIds === 'string') {
+        transaction.axieIds = JSON.parse(transaction.axieIds);
+      }
+
       const axies = await this.marketplaceService.getAxiesByIds(transaction.axieIds);
-      
       return { transaction, axies };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

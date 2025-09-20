@@ -693,8 +693,8 @@ async function showSweepPreview(ctx: any, userId: number): Promise<void> {
         userId
       );
       const connectedToken = tokenService.connect(walletInstance);
-      // Gateway contract is the actual spender that pulls WETH for the purchase
-      const gatewayAddress = '0x21a0a1c081dc2f3e48dc391786f53035f85ce0bc';
+      // Gateway contract that actually pulls WETH (deprecated gateway)
+      const deprecatedGateway = '0x3B3aDf1422f84254B7fbb0e7cA62Bd0865133fe3';
       /**
        * Format the total cost before passing it into `checkAllowance`.
        * The helper internally calls `ethers.parseEther`, which will throw
@@ -709,7 +709,7 @@ async function showSweepPreview(ctx: any, userId: number): Promise<void> {
         .replace(/\.?0+$/, '');
 
       const allowanceInfo = await connectedToken.checkAllowance(
-        gatewayAddress,
+        deprecatedGateway,
         formattedCost
       );
       const needsApproval = !allowanceInfo.sufficientForAmount;
@@ -886,13 +886,13 @@ async function approveWeth(ctx: any, userId: number): Promise<void> {
       // Connect token service
       const connectedToken = tokenService.connect(walletInstance);
       
-      // Gateway contract is the actual spender that pulls WETH for the purchase
-      const gatewayAddress = '0x21a0a1c081dc2f3e48dc391786f53035f85ce0bc';
+      // Gateway contract that actually performs transferFrom (deprecated gateway)
+      const deprecatedGateway = '0x3B3aDf1422f84254B7fbb0e7cA62Bd0865133fe3';
       
       // Approve WETH
       const approveResult = await connectedToken.approveWeth(
         preview.totalCost.toString(),
-        gatewayAddress
+        deprecatedGateway
       );
       
       if (approveResult.success) {
@@ -924,7 +924,7 @@ You can now proceed with the sweep.
         logger.info('WETH approval successful', { userId, txHash: approveResult.txHash });
       } else {
         // Failure message – escape special Markdown characters so Telegram
-        // does not throw “can't parse entities” (error 400).
+        // does not throw "can't parse entities" (error 400).
         const errorText = approveResult.error || 'Unknown error';
         const escapedError = errorText
           .replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')        // basic markdown
@@ -1019,6 +1019,7 @@ This is a one-time transaction that allows the marketplace to use your WETH for 
 
 *Approval Details:*
 • Marketplace Contract: \`0x21a0a1c081dc2f3e48dc391786f53035f85ce0bc\`
+• Marketplace Contract: \`0x3B3aDf1422f84254B7fbb0e7cA62Bd0865133fe3\`
 • Amount to Approve: ${preview.totalCost.toFixed(4)} ETH
 • Estimated Gas: ~0.001 ETH
 
@@ -1087,6 +1088,17 @@ This action will use your WETH balance and cannot be undone. Are you sure you wa
 async function executeSweep(ctx: any, userId: number): Promise<void> {
   try {
     await ctx.answerCbQuery();
+
+    /* --------------------------------------------------------------
+     * Prevent duplicate execution – if a sweep is already running in
+     * this chat/session we skip the new request.
+     * ------------------------------------------------------------ */
+    if (ctx.session.sweepInProgress) {
+      await ctx.answerCbQuery('Sweep already in progress');
+      return;
+    }
+    // Mark sweep as in-progress so subsequent clicks are ignored
+    ctx.session.sweepInProgress = true;
     
     const preview = ctx.session.sweepPreview as SweepPreview;
     
@@ -1139,96 +1151,165 @@ async function executeSweep(ctx: any, userId: number): Promise<void> {
       
       if (result.success) {
         // Success message
+        const txHashDisplay = result.txHash || result.transaction?.txHash;
         const message = `
 ✅ *Sweep Executed Successfully!*
 
 Collection: *${collectionNames[collection]}*
 Quantity: *${result.purchasedAxies.length} Axies*
-Total Spent: *${result.totalSpent.toFixed(4)} ETH*
-Gas Used: *${result.gasUsed?.toFixed(4) || 'Unknown'} ETH*
+Total Spent: *${result.totalSpent.toFixed(4)} WETH*
+Gas Used: *${result.gasUsed?.toFixed(4) || 'Unknown'} RON*
 
-Transaction Hash: \`${result.transaction?.txHash}\`
+Transaction Hash: \`${txHashDisplay || 'N/A'}\`
 
 Use /history to view your transaction history.
         `;
         
-        await ctx.editMessageText(message, {
-          parse_mode: 'Markdown',
-          reply_markup: {
+        let keyboard;
+        if (result.transaction?.txHash) {
+          // DB saved – can show internal details link
+          keyboard = {
             inline_keyboard: [
               [
-                Markup.button.callback('📊 View Details', `sweep:view_transaction:${result.transaction?.txHash}`),
+                Markup.button.callback('📊 View Details', `sweep:view_transaction:${result.transaction.txHash}`),
                 Markup.button.callback('🧹 New Sweep', 'sweep:start')
               ]
             ]
-          }
-        });
+          };
+        } else if (result.txHash) {
+          // Only raw hash – link to explorer
+          keyboard = {
+            inline_keyboard: [
+              [
+                Markup.button.url('🔗 View on Explorer', `https://explorer.roninchain.com/tx/${result.txHash}`),
+                Markup.button.callback('🧹 New Sweep', 'sweep:start')
+              ]
+            ]
+          };
+        } else {
+          // No hash at all
+          keyboard = {
+            inline_keyboard: [
+              [
+                Markup.button.callback('🧹 New Sweep', 'sweep:start')
+              ]
+            ]
+          };
+        }
         
-        // Monitor transaction in background
-        sweepService.monitorTransaction(ctx.dbConnection, result.transaction!.txHash)
-          .then(status => {
-            if (status === 'confirmed') {
-              ctx.reply(`✅ Your sweep transaction has been confirmed on the blockchain!`);
-            } else {
-              ctx.reply(`❌ Your sweep transaction failed on the blockchain. Please check the transaction details.`);
-            }
-          })
-          .catch(error => {
-            logger.error('Error monitoring transaction', { error, txHash: result.transaction?.txHash });
+        try {
+          await ctx.editMessageText(message, {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard
           });
+        } catch (editError) {
+          logger.error('Error editing message for successful sweep', { error: editError, userId });
+          // Fall back to sending a new message
+          await ctx.reply(message, {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard
+          });
+        }
+        
+        // Monitor transaction in background (use raw hash fallback when DB save failed)
+        if (result.txHash) {
+          sweepService.monitorTransaction(ctx.dbConnection, result.txHash)
+            .then(status => {
+              if (status === 'confirmed') {
+                ctx.reply(`✅ Your sweep transaction has been confirmed on the blockchain!`);
+              } else {
+                ctx.reply(`❌ Your sweep transaction failed on the blockchain. Please check the transaction details.`);
+              }
+            })
+            .catch(error => {
+              logger.error('Error monitoring transaction', { error, txHash: result.txHash });
+            });
+        }
         
         logger.info('Sweep executed successfully', {
           userId,
           collection,
           quantity: result.purchasedAxies.length,
-          txHash: result.transaction?.txHash
+          txHash: result.txHash
         });
       } else {
-        // Failure message
-        // Escape markdown‐sensitive characters and trim overly long errors
-        const errorMessage = (result.error || 'Unknown error')
-          .replace(/[*_`\\[\\]()~>#+=\\-|{}.!]/g, '\\\\$&')  // escape Markdown
-          .substring(0, 500);                                // safety truncate
+        /* --------------------------------------------------------------
+         * Failure path – use HTML parse mode to avoid Telegram Markdown
+         * entity issues that arise from SQL or stack-trace characters.
+         * ------------------------------------------------------------ */
+        const rawError = String(result.error || 'Unknown error');
+        const esc = (s: string) =>
+          s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
         const message = `
-❌ *Sweep Execution Failed*
-
-Collection: *${collectionNames[collection]}*
-Quantity: *${quantity} Axies*
-
-Error: ${errorMessage}
-
+❌ <b>Sweep Execution Failed</b>\n\n
+Collection: <b>${esc(collectionNames[collection])}</b>\n
+Quantity: <b>${quantity} Axies</b>\n\n
+Error: <code>${esc(rawError).slice(0, 800)}</code>\n\n
 Please try again later or with different parameters.
         `;
-        
-        await ctx.editMessageText(message, {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [
-                Markup.button.callback('🔄 Try Again', 'sweep:preview'),
-                Markup.button.callback('🔙 Back to Sweep Menu', 'sweep:start')
-              ]
+
+        const keyboard = {
+          inline_keyboard: [
+            [
+              Markup.button.callback('🔄 Try Again', 'sweep:preview'),
+              Markup.button.callback('🔙 Back to Sweep Menu', 'sweep:start')
             ]
-          }
+          ]
+        };
+
+        try {
+          await ctx.editMessageText(message, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard
+          });
+        } catch (editError) {
+          logger.error('Error editing message for failed sweep', { error: editError, userId });
+          // Fall back to sending a new message
+          await ctx.reply(message, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard
+          });
+        }
+
+        logger.error('Sweep execution failed', {
+          userId,
+          collection,
+          quantity,
+          error: result.error
         });
-        
-        logger.error('Sweep execution failed', { userId, collection, quantity, error: result.error });
       }
     } catch (error) {
       logger.error('Error executing sweep', { error, userId, collection, quantity });
-      await ctx.editMessageText('Sorry, there was an error executing the sweep. Please try again later.', {
-        reply_markup: {
-          inline_keyboard: [
-            [Markup.button.callback('🔄 Try Again', 'sweep:preview')],
-            [Markup.button.callback('🔙 Back to Sweep Menu', 'sweep:start')]
-          ]
-        }
-      });
+      
+      try {
+        await ctx.editMessageText('Sorry, there was an error executing the sweep. Please try again later.', {
+          reply_markup: {
+            inline_keyboard: [
+              [Markup.button.callback('🔄 Try Again', 'sweep:preview')],
+              [Markup.button.callback('🔙 Back to Sweep Menu', 'sweep:start')]
+            ]
+          }
+        });
+      } catch (editError) {
+        logger.error('Error editing message for sweep execution error', { error: editError, userId });
+        // Fall back to sending a new message
+        await ctx.reply('Sorry, there was an error executing the sweep. Please try again later.', {
+          reply_markup: {
+            inline_keyboard: [
+              [Markup.button.callback('🔄 Try Again', 'sweep:preview')],
+              [Markup.button.callback('🔙 Back to Sweep Menu', 'sweep:start')]
+            ]
+          }
+        });
+      }
     }
   } catch (error) {
     logger.error('Error executing sweep', { error, userId });
     await ctx.reply('Sorry, there was an error processing your request. Please try again later.');
+  } finally {
+    // Always clear in-progress flag so user can initiate another sweep
+    ctx.session.sweepInProgress = false;
   }
 }
 
