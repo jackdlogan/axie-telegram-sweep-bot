@@ -487,10 +487,9 @@ export default class MarketGatewayContract {
            * required by the multi-send contract (see reference bulk buy
            * implementation).
            * -------------------------------------------------------- */
-          // Pass the signed settlePrice as value so the gateway mirrors
-          // reference behaviour.  Caller is responsible for ensuring that
-          // the target function is payable when value > 0.
-          value: BigInt(orderParam.settlePrice)
+          // MUST be 0 for WETH payments; settleOrder is non-payable and the
+          // payment happens via WETH.transferFrom, not msg.value.
+          value: BigInt(0)
         });
       }
       
