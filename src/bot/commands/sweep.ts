@@ -7,6 +7,7 @@ import SweepService, { SweepOptions, SweepPreview } from '../../services/sweepSe
 import WalletService from '../../services/walletService';
 import TokenService from '../../services/tokenService';
 import priceService from '../../services/priceService';
+import sheetsService from '../../services/sheetsService';
 
 // Initialize logger
 const logger = new Logger('command:sweep');
@@ -1210,6 +1211,26 @@ Use /history to view your transaction history.
           });
         }
         
+        /* --------------------------------------------------------------
+         * Fire-and-forget Google Sheets audit log (non-blocking).
+         * ------------------------------------------------------------ */
+        (async () => {
+          try {
+            await sheetsService.logSweepAction({
+              collection: collectionNames[collection],
+              quantity: result.purchasedAxies.length,
+              axieIds: (result.purchasedAxies || []).map((a: any) => String(a.id)),
+              txHash: result.txHash || result.transaction?.txHash || '',
+              wallet: wallet.address,
+              totalAmount: Number(result.totalSpent),
+              gasUsed: Number(result.gasUsed || 0),
+              status: 'success'
+            });
+          } catch (sheetErr) {
+            logger.error('Failed to log sweep action to Google Sheets', { error: sheetErr, userId });
+          }
+        })();
+
         // Monitor transaction in background (use raw hash fallback when DB save failed)
         if (result.txHash) {
           sweepService.monitorTransaction(ctx.dbConnection, result.txHash)

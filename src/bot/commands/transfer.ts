@@ -7,6 +7,7 @@ import MarketplaceService, { AxieCollection } from '../../services/marketplaceSe
 import SafeBatchTransferContract from '../../contracts/safeBatchTransfer';
 import config from '../../config';
 import { ethers } from 'ethers';
+import sheetsService from '../../services/sheetsService';
 
 // Initialize services
 const logger = new Logger('command:transfer');
@@ -676,7 +677,44 @@ async function executeTransfer(ctx: any, userId: number, wallet: any): Promise<v
         }
       }
     );
+
+    /* --------------------------------------------------------------
+     * Send Axie IDs in a separate plain-text message, each line
+     * with just the raw ID on its own line (no prefix).
+     * ------------------------------------------------------------ */
+    try {
+      const idLines = state.axieIds.join('\n');
+      await ctx.reply(idLines, { disable_web_page_preview: true });
+    } catch (e) {
+      logger.error('Failed to send Axie ID list message', { error: e, userId });
+    }
     
+    /* --------------------------------------------------------------
+     * Fire-and-forget Google Sheets audit log.
+     * ------------------------------------------------------------ */
+    (async () => {
+      try {
+        await sheetsService.logTransferAction({
+          collection:
+            state.collection === 'all'
+              ? 'All'
+              : formatCollectionName(state.collection as string),
+          quantity: state.axieIds.length,
+          axieIds: state.axieIds.map(String),
+          txHash: transferResult.txHash,
+          wallet: wallet.address,
+          totalAmount: 0,
+          gasUsed: 0,
+          status: 'success'
+        });
+      } catch (sheetErr) {
+        logger.error('Failed to log transfer action to Google Sheets', {
+          error: sheetErr,
+          userId
+        });
+      }
+    })();
+
     // Clear transfer state
     ctx.session.transferState = null;
     
