@@ -12,6 +12,20 @@ class SheetsService {
   private sheets: sheets_v4.Sheets | null = null;
   // Always hold a string (empty until first initialisation)
   private spreadsheetId: string = '';
+  /**
+   * Expected header row (A1:I1) for all tabs we write to.
+   */
+  private readonly defaultHeaders = [
+    'timestamp',
+    'collection',
+    'quantity',
+    'axieIds',
+    'txHash',
+    'wallet',
+    'totalAmount',
+    'gasUsed',
+    'status'
+  ];
   
   /**
    * Check if the service is properly configured
@@ -89,6 +103,9 @@ class SheetsService {
         };
       }
       
+      // Ensure header row exists and is correct
+      await this.ensureHeaders(tabName);
+      
       // Add timestamp as first column if not provided
       if (typeof row[0] !== 'string' || !row[0].includes(':')) {
         row = [new Date().toISOString(), ...row];
@@ -134,7 +151,7 @@ class SheetsService {
       new Date().toISOString(),
       data.collection,
       data.quantity,
-      data.axieIds.join(','),
+      data.axieIds.join('\n'),
       data.txHash,
       data.wallet,
       data.totalAmount,
@@ -163,7 +180,7 @@ class SheetsService {
       new Date().toISOString(),
       data.collection,
       data.quantity,
-      data.axieIds.join(','),
+      data.axieIds.join('\n'),
       data.txHash,
       data.wallet,
       data.totalAmount,
@@ -172,6 +189,43 @@ class SheetsService {
     ];
     
     return this.appendRow('Transfer', row);
+  }
+
+  /**
+   * Ensure the first row (headers) in the given tab matches defaultHeaders.
+   * Runs best-effort; logs warnings but never throws.
+   */
+  private async ensureHeaders(tabName: string): Promise<void> {
+    try {
+      if (!this.isEnabled()) return;
+      const sheets = this.getClient();
+      if (!sheets) return;
+
+      const getRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: `${tabName}!A1:I1`
+      });
+
+      const existing = getRes.data.values?.[0] || [];
+      const needsUpdate =
+        existing.length !== this.defaultHeaders.length ||
+        !this.defaultHeaders.every((h, idx) => h === existing[idx]);
+
+      if (needsUpdate) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: this.spreadsheetId,
+          range: `${tabName}!A1:I1`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [this.defaultHeaders] }
+        });
+        logger.info('Header row ensured/updated in Google Sheets', { tabName });
+      }
+    } catch (err) {
+      logger.warn('Failed to ensure header row in Google Sheets (non-fatal)', {
+        tabName,
+        error: err
+      });
+    }
   }
 }
 
