@@ -155,6 +155,14 @@ Your private keys and seed phrases are encrypted and never stored in plaintext. 
       Markup.button.callback('🔄 Refresh', 'start:refresh')
     ]);
 
+    // Row 4: Google Sheet report link
+    keyboardButtons.push([
+      Markup.button.url(
+        '📄 Google Sheet Report',
+        'https://docs.google.com/spreadsheets/d/1K4wkz6ybcmrh1zvFJADaEczzR_M3oEDPIXQkTSwSrPk'
+      )
+    ]);
+
     const keyboard = Markup.inlineKeyboard(keyboardButtons);
     
     /**

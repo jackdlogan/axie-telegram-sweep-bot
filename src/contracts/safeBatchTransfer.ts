@@ -260,6 +260,9 @@ export default class SafeBatchTransferContract {
         this.contractAddress,
         true
       );
+
+      // Capture hash immediately (v6 field)
+      const sentHash = tx.hash;
       
       this.logger.info('Approval transaction sent', {
         txHash: tx.hash,
@@ -276,7 +279,7 @@ export default class SafeBatchTransferContract {
       
       return {
         success: true,
-        txHash: receipt.transactionHash
+        txHash: (receipt && (receipt.hash as string)) || sentHash
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -335,7 +338,7 @@ export default class SafeBatchTransferContract {
       const contract = this.getConnectedContract(wallet);
       
       // Execute batch transfer - explicitly call the single-recipient
-      // overload to avoid the “ambiguous function description” error.
+      // overload to avoid the "ambiguous function description" error.
       // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       // @ts-ignore – bracket-notation required for overloaded function
       const tx = await contract['safeBatchTransfer(address,uint256[],address)'](
@@ -343,6 +346,9 @@ export default class SafeBatchTransferContract {
         axieIdsBigInt,
         recipientAddress
       );
+      
+      // Capture hash immediately (v6 field)
+      const sentHash = tx.hash;
       
       this.logger.info('Batch transfer transaction sent', {
         txHash: tx.hash,
@@ -361,7 +367,7 @@ export default class SafeBatchTransferContract {
       
       return {
         success: true,
-        txHash: receipt.transactionHash
+        txHash: (receipt && (receipt.hash as string)) || sentHash
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -426,7 +432,7 @@ export default class SafeBatchTransferContract {
       const contract = this.getConnectedContract(wallet);
       
       // Execute batch transfer - explicitly call the multi-recipient
-      // overload to avoid the “ambiguous function description” error.
+      // overload to avoid the "ambiguous function description" error.
       // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       // @ts-ignore – bracket-notation required for overloaded function
       const tx = await contract['safeBatchTransfer(address,uint256[],address[])'](
@@ -434,6 +440,9 @@ export default class SafeBatchTransferContract {
         axieIdsBigInt,
         recipientAddresses
       );
+      
+      // Capture hash immediately (v6 field)
+      const sentHash = tx.hash;
       
       this.logger.info('Batch transfer transaction sent', {
         txHash: tx.hash,
@@ -453,7 +462,7 @@ export default class SafeBatchTransferContract {
       
       return {
         success: true,
-        txHash: receipt.transactionHash
+        txHash: (receipt && (receipt.hash as string)) || sentHash
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
