@@ -487,12 +487,10 @@ export default class MarketGatewayContract {
            * required by the multi-send contract (see reference bulk buy
            * implementation).
            * -------------------------------------------------------- */
-          // For WETH payments we *must* pass zero value.  Supplying a
-          // non-zero amount causes a revert because `settleOrder` is
-          // non-payable (the WETH is transferred via transferFrom,
-          // not msg.value).  The gateway contract still uses the
-          // `settlePrice` parameter inside the encoded calldata.
-          value: BigInt(0)
+          // Pass the signed settlePrice as value so the gateway mirrors
+          // reference behaviour.  Caller is responsible for ensuring that
+          // the target function is payable when value > 0.
+          value: BigInt(orderParam.settlePrice)
         });
       }
       
