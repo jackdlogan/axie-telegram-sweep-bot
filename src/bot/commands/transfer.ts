@@ -440,32 +440,40 @@ async function showTransferConfirmation(
       throw new Error('Missing required transfer information');
     }
     
+    // Simple HTML escape helper
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    
     // Get Axie details for display
     const axieDetails = await getAxieDetailsForDisplay(axieIds);
     
     // Check if approval is needed
     const isApproved = await safeBatchTransferContract.isApprovedForAll(walletAddress);
     
-    // Create confirmation message
-    let message = '🔄 *Transfer Confirmation*\n\n';
+    // --------------------------------------------------------------
+    // Build confirmation message using HTML to avoid Markdown issues
+    // --------------------------------------------------------------
+    let message = '🔄 <b>Transfer Confirmation</b>\n\n';
     message += `You are about to transfer ${axieIds.length} Axies to:\n`;
-    message += `\`${formatAddress(recipientAddress)}\`\n\n`;
+    message += `<code>${esc(formatAddress(recipientAddress))}</code>\n\n`;
     
     // Add collection info
     if (collection && collection !== 'all') {
       const emoji = getCollectionEmoji(collection);
-      message += `Collection: ${emoji} ${formatCollectionName(collection)}\n\n`;
+      message += `Collection: ${emoji} ${esc(formatCollectionName(collection))}\n\n`;
     }
     
     // Add Axie details
-    message += '*Axies to transfer:*\n';
+    message += '<b>Axies to transfer:</b>\n';
     
     // Show first 5 Axies with details
     const displayLimit = 5;
     const displayAxies = axieDetails.slice(0, displayLimit);
     
     for (const axie of displayAxies) {
-      message += `• #${axie.id} - ${axie.name || `Axie #${axie.id}`} (${axie.class})\n`;
+      message += `• #${axie.id} - ${esc(axie.name || `Axie #${axie.id}`)} (${esc(
+        axie.class
+      )})\n`;
     }
     
     // If there are more Axies, show count
@@ -474,7 +482,7 @@ async function showTransferConfirmation(
     }
     
     // Add approval status
-    message += '\n*Contract Approval:*\n';
+    message += '\n<b>Contract Approval:</b>\n';
     if (isApproved) {
       message += '✅ Transfer contract is already approved\n';
     } else {
@@ -482,7 +490,8 @@ async function showTransferConfirmation(
     }
     
     // Add warning
-    message += '\n⚠️ *WARNING*: This action cannot be undone! Please verify the recipient address carefully.\n';
+    message +=
+      '\n⚠️ <b>WARNING</b>: This action cannot be undone! Please verify the recipient address carefully.\n';
     message += '\nDo you want to proceed with this transfer?';
     
     // Create confirmation buttons
@@ -498,7 +507,7 @@ async function showTransferConfirmation(
     
     // Send confirmation message
     await ctx.reply(message, {
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: keyboard
       }
