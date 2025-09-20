@@ -837,11 +837,9 @@ class SweepService {
 
       return {
         success: true,
-        txHash:
-          (lastReceipt as any).transactionHash ||
-          (lastReceipt as any).hash ||
-          lastTxHash ||
-          '',
+        // Revert to legacy behaviour – rely solely on `transactionHash`
+        // which is always present on successful receipts.
+        txHash: (lastReceipt as any).transactionHash || '',
         gasUsed
       };
     } catch (error) {
@@ -852,20 +850,10 @@ class SweepService {
       });
       
       // Extract transaction hash if available
-      let txHash = '';
-      // Ethers v6 may expose the hash on different keys depending on where
-      // the failure originates (e.g. `.hash` on TransactionResponse or
-      // `.transactionHash` on a reverted receipt).  Capture both.
-      if (error && typeof error === 'object') {
-        txHash =
-          (error as any).transactionHash ||
-          (error as any).hash ||
-          '';
-      }
-      
       return {
         success: false,
-        txHash,
+        // On failure we do not attempt to infer a hash; keep empty.
+        txHash: '',
         error: errorMessage
       };
     }
